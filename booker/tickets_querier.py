@@ -33,7 +33,9 @@ class Querier():
         res = {
             'ticket_type': self.ticket_type,
             'departure': self.departure,
+            'departure_code': self.departure_code,
             'destination': self.destination,
+            'destination_code': self.destination_code,
             'date': self.date,
             'details': self.details,
             'items': []
@@ -52,14 +54,20 @@ class Querier():
             # 0 -> secret_key, 1->book, 2->train_uid, 3->train_id(or name, G40 for example), 
             i_info = i.split('|')
             item = {
+                'train_num': i_info[2],
                 'train_id': i_info[3],
                 'schedual': f"from: {maps[i_info[6]]} to: {maps[i_info[7]]}, \
                             time: {i_info[8]} -- {i_info[9]}, duration: {i_info[10]}",
                 'depart_time': i_info[8],
-                # 'arrive_time': i_info[9],
+                'arrive_time': i_info[9],
                 '商务座': i_info[-5],
                 '一等座': i_info[-6],
                 '二等座': i_info[-7],
+                '硬座': i_info[-8],
+                '硬卧': i_info[-9],
+                '无座': i_info[-11],
+                '软卧': i_info[-14],
+                '其他': i_info[-15],
                 'could_buy': i_info[11],
                 'secret_str': i_info[0]
             }

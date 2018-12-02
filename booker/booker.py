@@ -6,11 +6,12 @@ this module implements the central booker object.
 
 import requests
 from datetime import date
+import time
 from time import strptime
 from urllib.parse import unquote
 # from time import sleep
 from booker.verify_captcha import verify_captcha
-from booker.consts import urls, headers, captcha_path
+from booker.consts import urls, headers, captcha_path, seat_type_map
 from booker.tickets_querier import Querier
 
 
@@ -23,6 +24,10 @@ class Booker():
         self.err = False
         self.contacts = None
         self.repeat_submit_token = None
+        self.left_ticket_key = None
+        self.purpose_codes = None
+        self.train_location = None
+        self.key_check_ischange = None
         # initialize a session 
         self.session = requests.Session()
         self.session.headers.update(headers)
@@ -96,7 +101,8 @@ class Booker():
             'pageSize': '10'
         }
         res = self.session.post(urls['get_user_contacts'], data=data)
-        return res.json()['data']['datas']
+        self.contacts = res.json()['data']['datas']
+        return self.contacts
 
 
     # first, make a request to left_ticket_page to imitate human
@@ -108,104 +114,159 @@ class Booker():
         querier = Querier(departure, destination, date, **kwargs)
         if querier.get_sc():
             self.querier = querier
-        else
+        else:
             print('err with getting station code map')
             self.err = True
 
     # query tickets.
-    def query_tickets(self):
-        return self.querier.query_tickets(self.session)
-
-    # get user 
-
-    # query and find appropriate tickets
-    def resolve_tickets(self, passenger, train_id=(), depart_time_span=('00:00', '23:59'))
-        pass
-
-    # click book button
-    def book(self, train_id=(), depart_time_span=('00:00', '23:59')):
-        # check user -> query -> book 
-        pick = None  # the train ticket that would be booked
+    def query_tickets(self, train_id=(), depart_time_span=('00:00', '23:59')):
         def clock(t):
             return strptime(t, '%H:%M')
-        if self.user_is_loggedin():
-            self.session.post(urls['check_user'], data={'_json_att': None})
-            _, solution = self.querier.query_tickets(self.session)  # query
-            # filter by could buy
-            solution['items'] = [i for i in solution['items'] if i['could_buy'] == 'Y']
-            # filter by train_id
-            if train_id:
-                solution['items'] = [ i for i in solution['items'] if i['train_id'] in train_id]
-            # filter by span of time
-            t1, t2 = depart_time_span
-            solution['items'] = [ i for i in solution['items'] if clock(t1) < clock(i['depart_time']) <= clock(t2)]
-            # if got at least one solution
-            if solution['items']:
-                pick = solution['items'].pop(0)
-                # construct the form data
-                data = {
-                    'secretStr': unquote(pick['secret_str']),
-                    'train_date': solution['date'],
-                    'back_train_date': str(date.today()),
-                    'tour_flag': 'dc',
-                    'purpose_codes': solution['ticket_type'],
-                    'query_from_station_name': solution['departure'],
-                    'query_to_station_name': solution['destination'],
-                    'undefined': None
-                }
-                print(data)
-                res = self.session.post(urls['make_an_order'], data=data)
-                # to be improved 
-                print res.json()
-                return res.json()['status']
-        return False
+        s = self.querier.query_tickets(self.session)
+        # filter by 'could_by'
+        s['items'] = [i for i in s['items'] if i['could_buy'] == 'Y']
+        # filter by span of departure time
+        t1, t2 = depart_time_span
+        s['items'] = [ i for i in s['items'] if clock(t1) <= clock(i['depart_time']) <= clock(t2)]
+        #filter by train_id
+        if train_id:
+            s['items'] = [ i for i in s['items'] if i['train_id'] in train_id]
+        return s
 
-    # get globalRepeatSubmitToken
-    def get_submit_token(self):
-        res = self.session.get(urls['get_submit_token'], data={'_json_att': None})
+    # query and find appropriate tickets
+    def resolve_tickets(self, passenger, query_results, acceptable_seattype_order=('二等座', '硬卧', '硬座')):
+        solution = None
+        for i in query_results['items']:
+            for seat_type in acceptable_seattype_order:
+                if i[seat_type].isdigit or i[seat_type] == '有':
+                    solution = query_results
+                    passenger_info = [p for p in self.contacts if p['passenger_name'] == passenger][0]
+                    solution['passenger_info'] = passenger_info
+                    solution['seat_type'] = seat_type
+                    solution['target'] = solution['items'].pop(i)
+                    return solution
+        return solution
+
+
+    # what should we do after clicking the book button
+    def make_an_order(self, passenger_info, solution):
+        # imitate the browser behavior
+        self.session.post(urls['check_user'], data={'_json_att': ''})
+        data = {
+            'secretStr': unquote(solution['target']['secret_str']),
+            'train_date': solution['date'],
+            'back_train_date': str(date.today()),
+            'tour_flag': 'dc',
+            'purpose_codes': solution['ticket_type'],
+            'query_from_station_name': solution['departure'],
+            'query_to_station_name': solution['destination'],
+            'undefined': ''
+        }
+        self.session.post(urls['make_an_order'], data=data)
+    
+    # get globalRepeatSubmitToken | ypInfoDetail --> requsts the initdc, get 
+    def parse_initdc(self):
+        res = self.session.get(urls['initdc'], data={'_json_att': ''})
+        self.left_ticket_key = res.text.split("ypInfoDetail':'")[1].split("'")[0]
+        self.purpose_codes = res.text.split("purpose_codes':'")[1].split("'")[0]
+        self.train_location = res.text.split("'dc','train_location':'")[1].split("'")[0]
+        self.key_check_ischange = res.text.split("key_check_isChange':'")[1].split("'")[0]
         txt = res.text[:800]
         self.repeat_submit_token = txt.split("globalRepeatSubmitToken = '")[1].split("'")[0]
 
-    def get_passenger_info(self):
+    # get passenger dtos 
+    def get_passenger_dtos(self):
+        data = {'_json_att': '', 'REPEAT_SUBMIT_TOKEN': self.repeat_submit_token}
+        res = self.session.post(urls['get_passenger_dtos'], data=data)
+        return res.json()
+
+    def check_order(self, solution):
+        seat_type = seat_type_map[solution['seat_type']]
+        ticket_type = 1 if solution['ticket_type'] == 'ADULT' else 2
+        # train_info = solution['target']
+        passenger_name = solution['passenger_info']['passenger_name']
+        id_num = solution['passenger_info']['passenger_id_no']
         data = {
-            '_json_att': None,
+            'cancel_flag': '2',
+            'bed_level_order_num': '000000000000000000000000000000',
+            # 'passengerTicketStr': '3,0,1,xxx,1,xxxxxxxxxxxxxx,,N',   #座位类型,0,票类型(成人/儿童),name,身份类型(身份证/军官证….),身份证,电话号码,保存状态
+            'passengerTicketStr': f'{seat_type},0,{ticket_type},{passenger_name},1,{id_num},,N'
+            'oldPassengerStr': f'{passenger_name},1,{id_num},1_',  #姓名  1  身份证号码  1
+            'tour_flag': 'dc',
+            'randCode': '',
+            'whatsSelect': '1',      
+            '_json_att': '',
             'REPEAT_SUBMIT_TOKEN': self.repeat_submit_token
         }
-        res = self.session.post(urls['get_passenger_info'], data=data)
-        self.passenger_info = res.json()
-        return self.passenger_info
+        return self.session.post(urls['check_order_info'], data=data).json()
 
-
-    def check_order_info(self):
-        passengers = self.passenger_info['data']['normal_passengers']
-        data = {
-            'cancel_flag':'2',
-            'bed_level_order_num':'000000000000000000000000000000',
-            'passengerTicketStr':'3,0,1,xxx,1,xxxxxxxxxxxxxx,,N',   #座位类型,0,票类型(成人/儿童),name,身份类型(身份证/军官证….),身份证,电话号码,保存状态
-            'passengerTicketStr': f'3,0,1,{passengers[]}'
-            'oldPassengerStr':'xxx,1,xxxxxxxxxxxxxxxx,1',  #姓名  1  身份证号码  1
-            'tour_flag':'dc',
-            'randCode':'',       #随机数
-            'whatsSelect':'1',      
-            '_json_att':'',
+    # submit order
+    def submit_order(self, solution):
+        data={
+            'train_date': 'Mon Dec 03 2018 00:00:00 GMT+0800 (China Standard Time)',
+            'train_no': solution['target']['train_num'],
+            'stationTrainCode': solution['target']['train_id'],
+            'seatType': seat_type_map[solution['seat_type']],   # https://kyfw.12306.cn/otn/confirmPassenger/initDc 检视元素可查看
+            'fromStationTelecode': solution['departure_code'],
+            'toStationTelecode': solution['destination_code'],
+            'leftTicket': self.left_ticket_key,
+            'purpose_codes': self.purpose_codes,
+            'train_location': self.train_location,
+            '_json_att': '',
             'REPEAT_SUBMIT_TOKEN': self.repeat_submit_token
         }
+        return self.session.post(urls['submit_order'], data=data).json()
 
-    
-    def submit_order(self):
-        pass
+    # confirm order 
+    def confirm_order(self, solution):
+        seat_type = seat_type_map[solution['seat_type']]
+        ticket_type = 1 if solution['ticket_type'] == 'ADULT' else 2
+        # train_info = solution['target']
+        passenger_name = solution['passenger_info']['passenger_name']
+        id_num = solution['passenger_info']['passenger_id_no']
+        data={
+            'passengerTicketStr': f'{seat_type},0,{ticket_type},{passenger_name},1,{id_num},,N'
+            'oldPassengerStr': f'{passenger_name},1,{id_num},1_',  #姓名  1  身份证号码  1
+            'randCode': '',
+            'purpose_codes': self.purpose_codes,
+            'key_check_isChange': self.key_check_ischange,
+            'leftTicketStr': self.left_ticket_key,
+            'train_location': self.train_location,
+            'choose_seats':'',       #座位类型，一般是高铁用
+            'roomType': '00',   # const
+            'dwAll': 'N',       # const
+            '_json_att': '',
+            'seatDetailType':'000', # const
+            'whatsSelect': '1',     # const
+            'REPEAT_SUBMIT_TOKEN': self.repeat_submit_token
+        }
+        return self.session.post(urls['confir_order'], data=data)
 
-    def confirm_order(self):
-        pass
+    # wait order results
+    def query_orderid_inqueue(self):
+        data={
+            'random': str(time.time()),
+            'tourFlag': 'dc',
+            '_json_att': '',
+            'REPEAT_SUBMIT_TOKEN': self.repeat_submit_token
+        }
+        res = self.session.post(urls['query_orderid'], data=data)
+        order_id = res.json()['data']['orderId']
+        if order_id:
+            self.order_id = order_id
+        return order_id
 
-    def wait_book_result(self):
-        pass
+    # get book result 
+    def check_order_result(self):
+        data={
+            'REPEAT_SUBMIT_TOKEN': self.repeat_submit_token,
+            '_json_att': '',
+            'orderSequence_no': self.order_id
+        }
+        return self.session.post(urls['book_result']).json()['status']
 
-    def logger(self):
-        pass
 
-    def monitor(self):
-        pass
+
     
 
 
