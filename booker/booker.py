@@ -202,8 +202,11 @@ class Booker():
 
     # submit order
     def submit_order(self, solution):
+        y, _, d = solution['date'].split('-')
+        w_m = time.ctime()[:7]
         data={
-            'train_date': 'Mon Dec 03 2018 00:00:00 GMT+0800 (China Standard Time)',
+            'train_date': f'{w_m} {d} {y} 00:00:00 GMT+0800 (China Standard Time)',
+            # 'train_date': 'Mon Dec 03 2018 00:00:00 GMT+0800 (China Standard Time)',
             'train_no': solution['target']['train_num'],
             'stationTrainCode': solution['target']['train_id'],
             'seatType': seat_type_map[solution['seat_type']],   # https://kyfw.12306.cn/otn/confirmPassenger/initDc 检视元素可查看

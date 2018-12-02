@@ -33,8 +33,8 @@ urls = {
   'check_order_info': 'https://kyfw.12306.cn/otn/confirmPassenger/checkOrderInfo',
   'submit_order': 'https://kyfw.12306.cn/otn/confirmPassenger/getQueueCount',
   'confirm_order': 'https://kyfw.12306.cn/otn/confirmPassenger/confirmSingleForQueue',
-  'wait': 'https://kyfw.12306.cn/otn/confirmPassenger/queryOrderWaitTime',
-  'book_results': 'https://kyfw.12306.cn/otn/confirmPassenger/resultOrderForDcQueue',
+  'query_orderid': 'https://kyfw.12306.cn/otn/confirmPassenger/queryOrderWaitTime',
+  'book_result': 'https://kyfw.12306.cn/otn/confirmPassenger/resultOrderForDcQueue',
 
   # third party for punching captcha in 12306
   'punch_captcha': 'http://littlebigluo.qicp.net:47720/',
