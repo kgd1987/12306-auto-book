@@ -10,7 +10,7 @@ import time
 from time import strptime
 from urllib.parse import unquote
 # from time import sleep
-from booker.verify_captcha import verify_captcha
+from booker.verify_captcha import verify_captcha_auto, verify_captcha
 from booker.consts import urls, headers, captcha_path, seat_type_map
 from booker.tickets_querier import Querier
 
@@ -64,8 +64,8 @@ class Booker():
         with open(captcha_path, 'wb') as f:
             f.write(res.content)
         data = {
-            # 'answer': verify_captcha(captcha_path),
-            'answer': verify_captcha(),
+            'answer': verify_captcha_auto(captcha_path),
+            # 'answer': verify_captcha(),
             'login_site': 'E',
             'rand': 'sjrand'
         }
@@ -116,40 +116,55 @@ class Booker():
             self.querier = querier
         else:
             print('err with getting station code map')
-            self.err = True
-
+            self.err = True 
+   
     # query tickets.
-    def query_tickets(self, train_id=(), depart_time_span=('00:00', '23:59')):
+    def query_tickets(self, train_id=(), depart_time_span=(), acceptable_seat_type=('二等座', '硬卧')):
         def clock(t):
             return strptime(t, '%H:%M')
+        def has_left_tickets(tickets_info):
+            for s in tickets_info:
+                if s not in ['', '无']:
+                    return True
+            return False
+        # filter
+        def ticket_filter(i):
+            if i['could_buy'] != 'Y':
+                return False
+            if train_id and i['train_id'] not in train_id:
+                return False
+            if depart_time_span:
+                t1, t2 = depart_time_span
+                if not clock(t1) <= clock(i['depart_time']) <= clock(t2):
+                    return False
+            left_tickets_num = [i[seat_type] for seat_type in acceptable_seat_type]
+            if not has_left_tickets(left_tickets_num):
+                return False
+            return True
         s = self.querier.query_tickets(self.session)
-        # filter by 'could_by'
-        s['items'] = [i for i in s['items'] if i['could_buy'] == 'Y']
-        # filter by span of departure time
-        t1, t2 = depart_time_span
-        s['items'] = [ i for i in s['items'] if clock(t1) <= clock(i['depart_time']) <= clock(t2)]
-        #filter by train_id
-        if train_id:
-            s['items'] = [ i for i in s['items'] if i['train_id'] in train_id]
+        s['acceptable_seat_type'] = acceptable_seat_type
+        filted_items =[i for i in s['items'] if ticket_filter(i)]
+        s['items'] = filted_items
         return s
 
     # query and find appropriate tickets
-    def resolve_tickets(self, passenger, query_results, acceptable_seattype_order=('二等座', '硬卧', '硬座')):
+    def resolve_tickets(self, passenger, query_results):
         solution = None
         for i in query_results['items']:
-            for seat_type in acceptable_seattype_order:
-                if i[seat_type].isdigit or i[seat_type] == '有':
+            for seat_type in query_results['acceptable_seat_type']:
+                if i[seat_type] not in ['', '无']:
                     solution = query_results
                     passenger_info = [p for p in self.contacts if p['passenger_name'] == passenger][0]
                     solution['passenger_info'] = passenger_info
                     solution['seat_type'] = seat_type
-                    solution['target'] = solution['items'].pop(i)
+                    solution['target'] = i
+                    solution['items'] = 'discarded 4 brief visual.'
                     return solution
         return solution
 
 
     # what should we do after clicking the book button
-    def make_an_order(self, passenger_info, solution):
+    def make_an_order(self, solution):
         # imitate the browser behavior
         self.session.post(urls['check_user'], data={'_json_att': ''})
         data = {
@@ -166,7 +181,7 @@ class Booker():
     
     # get globalRepeatSubmitToken | ypInfoDetail --> requsts the initdc, get 
     def parse_initdc(self):
-        res = self.session.get(urls['initdc'], data={'_json_att': ''})
+        res = self.session.post(urls['initdc'], data={'_json_att': ''})
         self.left_ticket_key = res.text.split("ypInfoDetail':'")[1].split("'")[0]
         self.purpose_codes = res.text.split("purpose_codes':'")[1].split("'")[0]
         self.train_location = res.text.split("'dc','train_location':'")[1].split("'")[0]
@@ -190,7 +205,7 @@ class Booker():
             'cancel_flag': '2',
             'bed_level_order_num': '000000000000000000000000000000',
             # 'passengerTicketStr': '3,0,1,xxx,1,xxxxxxxxxxxxxx,,N',   #座位类型,0,票类型(成人/儿童),name,身份类型(身份证/军官证….),身份证,电话号码,保存状态
-            'passengerTicketStr': f'{seat_type},0,{ticket_type},{passenger_name},1,{id_num},,N'
+            'passengerTicketStr': f'{seat_type},0,{ticket_type},{passenger_name},1,{id_num},,N',
             'oldPassengerStr': f'{passenger_name},1,{id_num},1_',  #姓名  1  身份证号码  1
             'tour_flag': 'dc',
             'randCode': '',
@@ -198,6 +213,7 @@ class Booker():
             '_json_att': '',
             'REPEAT_SUBMIT_TOKEN': self.repeat_submit_token
         }
+        print(data)
         return self.session.post(urls['check_order_info'], data=data).json()
 
     # submit order
@@ -218,7 +234,7 @@ class Booker():
             '_json_att': '',
             'REPEAT_SUBMIT_TOKEN': self.repeat_submit_token
         }
-        return self.session.post(urls['submit_order'], data=data).json()
+        return self.session.post(urls['submit_order'], data=data)
 
     # confirm order 
     def confirm_order(self, solution):
@@ -228,7 +244,7 @@ class Booker():
         passenger_name = solution['passenger_info']['passenger_name']
         id_num = solution['passenger_info']['passenger_id_no']
         data={
-            'passengerTicketStr': f'{seat_type},0,{ticket_type},{passenger_name},1,{id_num},,N'
+            'passengerTicketStr': f'{seat_type},0,{ticket_type},{passenger_name},1,{id_num},,N',
             'oldPassengerStr': f'{passenger_name},1,{id_num},1_',  #姓名  1  身份证号码  1
             'randCode': '',
             'purpose_codes': self.purpose_codes,
@@ -243,7 +259,7 @@ class Booker():
             'whatsSelect': '1',     # const
             'REPEAT_SUBMIT_TOKEN': self.repeat_submit_token
         }
-        return self.session.post(urls['confir_order'], data=data)
+        return self.session.post(urls['confirm_order'], data=data).json()
 
     # wait order results
     def query_orderid_inqueue(self):
@@ -266,7 +282,7 @@ class Booker():
             '_json_att': '',
             'orderSequence_no': self.order_id
         }
-        return self.session.post(urls['book_result']).json()['status']
+        return self.session.post(urls['book_result'], data=data).json()['status']
 
 
 

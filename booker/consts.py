@@ -54,8 +54,10 @@ captcha_path = r'C:\Users\Administrator\Desktop\12306_captcha.png'
 seat_type_map = {
     '商务座': '9',
     '一等座': 'M',
-    '二等座': '0',
+    '二等座': 'O',
     '硬卧': '3',
     '硬座': '1',
-    '软卧': '4'
+    '软卧': '4',
+    '高级软卧': '6',
+    '一人软包': 'H',
 }
