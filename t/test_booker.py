@@ -12,8 +12,9 @@ username = 'benmooo'
 password = '*********'
 departure = '杭州东'
 destination = '徐州东'
-passenger_name = 'foo'
-ticket_time = str(date.today())
+passenger_name = 'John Doe'
+ticket_type = 'ADULT'
+ticket_date = str(date.today())
 train_id = ('G40', 'G62', "G7610", "T32")
 depart_time_span = ('10:00', '17:00')
 acceptable_seat_type = ('二等座', '软卧')
@@ -29,7 +30,7 @@ b.get_user_contacts()
 b.goto_query_page()
 
 # init querier and query tickets
-b.init_querier(departure, destination, ticket_time, monitor=monitor)
+b.init_querier(departure, destination, ticket_date, ticket_type=ticket_type, monitor=monitor)
 query_result = b.query_tickets(train_id=train_id, depart_time_span=depart_time_span, acceptable_seat_type=acceptable_seat_type)
 solution = b.resolve_tickets(passenger_name, query_result)
 
